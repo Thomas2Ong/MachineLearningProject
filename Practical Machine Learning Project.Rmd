@@ -1,0 +1,143 @@
+---
+title: "Practical Machine Learning Project"
+author: "Thomas Ong"
+date: "5/10/2020"
+output: html_document
+---
+
+
+### Executive Summary  
+The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbbell of six participants to quantify how much a particular activity they do.  Four prediction models were built and validated on data partitioned from training dataset. Random Forest model has the highest accuracy of 98.6%, followed by GBM model's 91.2% accuracy. There was attempt to combine both Random Forest and GMB predictors to build a model; however, this model produced a low 47.5% accuracy. The last classification tree model produced 68.2% accuracy.  
+<br>
+Based on validation performance, Random Forest model is selected to predict testing dataset.  
+
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. 
+
+### Exploratory Analysis  
+Training and testing datasets were downloaded for exploration and models development.  
+```{r, echo=TRUE, warning=FALSE, cache=TRUE, message=FALSE, fig.width=3, fig.height=3}
+library(caret)
+library(ggplot2)
+library(rattle)
+library(rpart)
+training <- read.csv(file="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+testing <- read.csv(file="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+```
+Summary of training dataset was performed to analyse relevance of variables. Seven variables were identified as irrelevant to model development.
+```{r, echo=FALSE, warning=FALSE, cache=TRUE, fig.width=3, fig.height=3}
+names(training[,1:7])
+```
+Out of the 160 variables in training dataset, 93 variables have zero percentage and 67 variables have 98% of NA data. Variables with high percentage of NA data should be excluded in model development.
+```{r, echo=TRUE, warning=FALSE, cache=TRUE, fig.width=3, fig.height=3}
+varNA <- sapply(training, function(x) mean(is.na(x)))
+table(varNA)
+```
+
+In addition, the training dataset has 60 near zero variables that should be excluded in model development.
+```{r, echo=TRUE, warning=FALSE, cache=TRUE, fig.width=3, fig.height=3}
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+table(nsv$nzv)
+```
+
+### Data Cleansing  
+Based on exploratory analysis, three actions are required to cleanse the training and testing datasets:  
+<br>
+(1) Remove the seven irrelevant variables.  
+```{r, echo=TRUE, warning=FALSE, cache=TRUE, fig.width=3, fig.height=3}
+training <- training[,-c(1:7)]
+testing <- testing[,-c(1:7)]
+```
+<br>
+(2) Remove variables with 98% of NA data.
+```{r, echo=TRUE, warning=FALSE, cache=TRUE, fig.width=3, fig.height=3}
+varNA <- sapply(training, function(x) mean(is.na(x)))
+training <- training[,(varNA > 0.97) == "FALSE"]
+testing <- testing[,(varNA > 0.97) == "FALSE"]
+```
+<br>
+(3) Remove near zero variables.
+```{r, echo=TRUE, warning=FALSE, cache=TRUE, fig.width=3, fig.height=3}
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+training <- training[,nsv$nzv == "FALSE"]  ## nearZero = FALSE
+testing <- testing[,nsv$nzv == "FALSE"]
+names(training)
+```
+Training dataset has 52 covariates and the predictor classe after data cleansing. Correlations of the 52 covariates were performed so that only high correlation covariates were used in model building. Covariates with correlations above 0.70, 0.75, 0.80, 0.85, and 0.90 were extracted respectively to build and test the model. The model testing was carried out using data partitioned from training dataset. Covariates with correlations above 0.75 produced model of higher accuracy, and therefore the 21 relevant covariates were used for model development.
+```{r, echo=TRUE, warning=FALSE, cache=TRUE, fig.width=3, fig.height=3}
+varCor <- abs(cor(training[,-53]))
+HighCor <- findCorrelation(varCor, cutoff=0.75)
+names(training)[HighCor]
+training <- training[,c(HighCor,53)]
+testing <- testing[,c(HighCor,53)]
+```
+
+### Create validation dataset from training dataset  
+Multiple models were built and the one with highest accuracy will be used to predict testing dataset. In order to select the best fit model, training dataset is partitioned at 70:30 ratio into trainNew and trainValidate datasets. trainNew dataset is used to train the models, and trainValidate is used to test the models. 
+```{r, echo=TRUE, warning=FALSE, cache=TRUE, fig.width=3, fig.height=3}
+set.seed(9119)
+inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+trainNew <- training[inTrain,]
+trainValidate <- training[-inTrain,]
+dim(trainNew); dim(trainValidate)
+```
+
+### Models Building 
+Four models are built and best fit model is selected for prediction of testing dataset.  
+
+(A) Random Forest (RF)
+
+```{r, echo=TRUE, cache=TRUE, warning=FALSE, fig.width=3, fig.height=3}
+set.seed(9119)
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+modRF <- train(classe ~ ., data=trainNew, method="rf", trControl=controlRF)
+predRF <- predict(modRF, trainValidate)
+confusionMatrix(predRF, trainValidate$classe)$overall["Accuracy"]
+```
+
+This random forest model has an accuracy of 98.6% and expected out of sample error is 1.4%. The accuracy level is high for a prediction model.
+
+(B) Generalized Boosted Model (GBM)
+
+```{r, echo=TRUE, cache=TRUE, warning=FALSE, fig.width=3, fig.height=3}
+set.seed(9119)
+controlGBM <- trainControl(method="cv", number=5)
+modGBM <- train(classe~., method="gbm", data=trainNew, trControl=controlGBM, verbose=FALSE)
+predGBM <- predict(modGBM, trainValidate)
+confusionMatrix(predGBM, trainValidate$classe)$overall["Accuracy"]
+```
+This GBM model has an accuracy of 91.2% and expected out of sample error is 8.8%. The accuracy level is acceptable for a prediction model.
+
+(C) Combine predictors of RF and GBM models
+```{r, echo=TRUE, cache=TRUE, warning=FALSE, fig.width=3, fig.height=3}
+predDF <- data.frame(predRF, predGBM, classe=trainValidate$classe)
+combModFit <- train(classe~., method="gam", data=predDF)
+combPred <- predict(combModFit, predDF)
+confusionMatrix(combPred, predDF$classe)$overall["Accuracy"]
+```
+
+This combined predictors model produced an accuracy of 47.5% and expected out of sample error is 52.5% which is unacceptable for a prediction model.
+
+(D) Classification Tree
+
+```{r, echo=TRUE, cache=TRUE, warning=FALSE, fig.width=9, fig.height=3}
+modRPART <- rpart(classe ~ ., data=trainNew, method="class")
+fancyRpartPlot(modRPART)
+predRPART <- predict(modRPART, trainValidate, type = "class")
+confusionMatrix(predRPART, trainValidate$classe)$overall["Accuracy"]
+```
+
+Classification Tree produced an accuracy of 68.2% and expected out of sample error is 31.8% which is too high for prediction model.
+
+### Model Selection and Prediction of testing dataset
+
+Random Forest model produced the highest accuracy rate of 98.6%. This model is therefore used to predict testing dataset. The predictions are shown below. 
+
+```{r, echo=TRUE, cache=TRUE, warning=FALSE, fig.width=3, fig.height=3}
+predRFtest <- predict(modRF, testing)
+predRFtest
+```
+
+
+
+
